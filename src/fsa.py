@@ -1,55 +1,55 @@
-"""Frozen-sigma AFT: TabPFN backbone + JAX/Optax sigma fitting."""
+"""Frozen-sigma AFT: TabPFN backbone + scipy sigma fitting."""
 import numpy as np
-import jax
-import jax.numpy as jnp
-import optax
 from scipy.stats import norm
+from scipy.optimize import minimize
 from tabpfn import TabPFNRegressor
 
-EPS = 1e-8
-TABPFN_MAX = 10_000
+EPS              = 1e-8
+TABPFN_TRAIN_MAX = 1_000   # CPU limit for in-context training samples
+TABPFN_BATCH     = 164     # max test queries per forward pass on CPU
 
 
-def predict_log_time(X_train, y_train, X_test):
-    """In-context regression via TabPFN. y_train: log-times of uncensored subjects."""
-    X_train = np.asarray(X_train, dtype=float)
-    y_train = np.asarray(y_train, dtype=float)
-    X_test = np.asarray(X_test, dtype=float)
-    if len(X_train) > TABPFN_MAX:
-        idx = np.random.choice(len(X_train), TABPFN_MAX, replace=False)
-        X_train, y_train = X_train[idx], y_train[idx]
-    model = TabPFNRegressor(device="cpu")
-    model.fit(X_train, y_train)
-    return model.predict(X_test)
+def predict_log_time(X_train, T_train, X_test):
+    """Predict log-times via TabPFN in-context regression.
 
-
-def fit_sigma(T, Delta, mu_log, n_steps=500, lr=0.01):
-    """Fit σ by censored log-likelihood MLE via Optax.
-
-    T: observed times, Delta: event indicators, mu_log: predicted log-times (all train subjects).
+    Trains on actual times T_train (uncensored), predicts median T for X_test,
+    returns log of those predictions as mu_log.
     """
-    log_t = jnp.log(jnp.clip(jnp.array(T, dtype=float), EPS, None))
-    mu = jnp.array(mu_log, dtype=float)
-    d = jnp.array(Delta, dtype=float)
+    X_train = np.asarray(X_train, dtype=float)
+    T_train = np.asarray(T_train, dtype=float)
+    X_test  = np.asarray(X_test,  dtype=float)
+    if len(X_train) > TABPFN_TRAIN_MAX:
+        idx = np.random.choice(len(X_train), TABPFN_TRAIN_MAX, replace=False)
+        X_train, T_train = X_train[idx], T_train[idx]
+    model = TabPFNRegressor(device="cpu")
+    model.fit(X_train, T_train)
+    preds = np.concatenate([
+        model.predict(X_test[i : i + TABPFN_BATCH], output_type="median")
+        for i in range(0, len(X_test), TABPFN_BATCH)
+    ])
+    return np.log(np.clip(preds, EPS, None))
 
-    def neg_ll(log_sigma):
-        sigma = jnp.exp(log_sigma) + EPS
-        z = (log_t - mu) / sigma
-        log_f = -log_t - jnp.log(sigma) + jax.scipy.stats.norm.logpdf(z)
-        log_S = jax.scipy.stats.norm.logcdf(-z)   # log(1 - Phi(z))
-        return -jnp.sum(d * log_f + (1 - d) * log_S)
 
-    log_sigma = jnp.zeros(())
-    opt = optax.adam(lr)
-    state = opt.init(log_sigma)
-    grad_fn = jax.jit(jax.value_and_grad(neg_ll))
+def fit_sigma(T, Delta, mu_log):
+    """Fit σ by censored log-likelihood MLE (log-normal AFT).
 
-    for _ in range(n_steps):
-        _, g = grad_fn(log_sigma)
-        updates, state = opt.update(g, state)
-        log_sigma = optax.apply_updates(log_sigma, updates)
+    T: observed times, Delta: event indicators, mu_log: predicted log-times.
+    Returns scalar sigma.
+    """
+    T      = np.asarray(T,      dtype=float)
+    Delta  = np.asarray(Delta,  dtype=float)
+    mu_log = np.asarray(mu_log, dtype=float)
+    log_t  = np.log(np.clip(T, EPS, None))
 
-    return float(jnp.exp(log_sigma))
+    def neg_ll(sigma_raw):
+        sigma   = np.log1p(np.exp(sigma_raw)) + EPS
+        z       = (log_t - mu_log) / sigma
+        log_f   = -log_t - np.log(sigma) + norm.logpdf(z)
+        log_S   = norm.logsf(z)
+        return -np.sum(Delta * log_f + (1 - Delta) * log_S)
+
+    res = minimize(neg_ll, x0=0.0, method="L-BFGS-B")
+    return float(np.log1p(np.exp(res.x[0])) + EPS)
 
 
 def survival_lognormal(t_grid, mu_log, sigma):
@@ -63,10 +63,10 @@ def survival_lognormal(t_grid, mu_log, sigma):
 
 def predicted_median(surv_matrix, t_grid):
     """First t where S(t) ≤ 0.5; inf if never crosses within the grid."""
-    t_grid = np.asarray(t_grid)
+    t_grid  = np.asarray(t_grid)
     crossed = surv_matrix <= 0.5
-    has = crossed.any(axis=1)
-    idx = crossed.argmax(axis=1)
-    med = np.full(len(surv_matrix), np.inf)
+    has     = crossed.any(axis=1)
+    idx     = crossed.argmax(axis=1)
+    med     = np.full(len(surv_matrix), np.inf)
     med[has] = t_grid[idx[has]]
     return med
