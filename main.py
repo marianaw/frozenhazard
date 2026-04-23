@@ -1,13 +1,14 @@
 """Main experiment pipeline: runs all datasets × all methods × k splits."""
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
 
 from src.fsa import (TABPFN_BATCH, TABPFN_TRAIN_MAX, fit_sigma,
                      predict_log_time, predicted_median, survival_lognormal)
+from src.bin_fsa import run_bin_fsa
 from src.baselines import BASELINES
 from src.utils import DATASETS, compute_ci, compute_ibs, make_splits
 
@@ -50,25 +51,29 @@ def run_dataset(name, n_splits=N_SPLITS):
     print(f"\n{'='*40}\n{name}\n{'='*40}")
     X, T, Delta = DATASETS[name]()
     splits = make_splits(len(T), n_splits=n_splits, test_size=TEST_SIZE, seed=SEED)
-    results = {m: [] for m in ["fsa", *BASELINES]}
+    PROPOSED = {"fsa": run_fsa, "bin_fsa": run_bin_fsa}
+    results  = {m: [] for m in [*PROPOSED, *BASELINES]}
 
     for k, (tr_idx, te_idx) in enumerate(splits):
         X_tr, T_tr, D_tr = X[tr_idx], T[tr_idx], Delta[tr_idx]
         X_te, T_te, D_te = X[te_idx], T[te_idx], Delta[te_idx]
         t_grid = np.linspace(np.percentile(T_tr, 5), np.percentile(T_tr, 95), T_GRID_PTS)
 
-        S, med, sigma = run_fsa(X_tr, T_tr, D_tr, X_te, t_grid)
-        row = evaluate(T_tr, D_tr, T_te, D_te, S, med, t_grid)
-        row["sigma"] = float(sigma)
-        results["fsa"].append(row)
+        for pname, pfn in PROPOSED.items():
+            S, med, sigma = pfn(X_tr, T_tr, D_tr, X_te, t_grid)
+            row = evaluate(T_tr, D_tr, T_te, D_te, S, med, t_grid)
+            if not np.isnan(sigma):
+                row["sigma"] = float(sigma)
+            results[pname].append(row)
 
         for bname, fn in BASELINES.items():
             S_b, med_b = fn(X_tr, T_tr, D_tr, X_te, t_grid)
             results[bname].append(evaluate(T_tr, D_tr, T_te, D_te, S_b, med_b, t_grid))
 
-        print(f"  [{k+1}/{n_splits}] σ={sigma:.3f}  "
+        sigma_fsa = results["fsa"][-1].get("sigma", float("nan"))
+        print(f"  [{k+1}/{n_splits}] σ={sigma_fsa:.3f}  "
               f"CI(fsa)={results['fsa'][-1]['ci']:.3f}  "
-              f"IBS(fsa)={results['fsa'][-1]['ibs']:.3f}")
+              f"CI(bin_fsa)={results['bin_fsa'][-1]['ci']:.3f}")
 
     return results
 
@@ -84,7 +89,7 @@ def load_results(path=RESULTS_FILE):
 
 def save_results(store, path=RESULTS_FILE):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    store["last_updated"] = datetime.utcnow().isoformat()
+    store["last_updated"] = datetime.now(timezone.utc).isoformat()
     with open(path, "w") as f:
         json.dump(store, f, indent=2)
 
@@ -104,13 +109,23 @@ def summarize(dataset_results):
     return pd.DataFrame(rows).set_index("method")
 
 
+ALL_METHODS = ["fsa", "bin_fsa", *BASELINES]
+
 if __name__ == "__main__":
     store = load_results()
 
     for ds in DATASETS:
-        if ds in store["datasets"]:
-            print(f"  {ds}: already done, skipping.")
+        cached = store["datasets"].get(ds, {})
+        missing = [m for m in ALL_METHODS if m not in cached]
+        if not missing:
+            print(f"  {ds}: all methods cached, skipping.")
             continue
+        if missing != ALL_METHODS:
+            print(f"  {ds}: re-running (missing: {missing})")
+        store["datasets"][ds] = run_dataset(ds)
+        save_results(store)
+        print(f"\n{ds} results:")
+        print(summarize(store["datasets"][ds]).to_string())
         store["datasets"][ds] = run_dataset(ds)
         save_results(store)                        # save after each dataset
         print(f"\n{ds} results:")
