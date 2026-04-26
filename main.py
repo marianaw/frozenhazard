@@ -9,6 +9,7 @@ import pandas as pd
 from src.fsa import (TABPFN_BATCH, TABPFN_TRAIN_MAX, fit_sigma,
                      predict_log_time, predicted_median, survival_lognormal)
 from src.bin_fsa import run_bin_fsa
+from src.pseudo_fsa import run_pseudo_fsa
 from src.baselines import BASELINES
 from src.utils import DATASETS, compute_ci, compute_ibs, make_splits
 
@@ -51,7 +52,7 @@ def run_dataset(name, n_splits=N_SPLITS):
     print(f"\n{'='*40}\n{name}\n{'='*40}")
     X, T, Delta = DATASETS[name]()
     splits = make_splits(len(T), n_splits=n_splits, test_size=TEST_SIZE, seed=SEED)
-    PROPOSED = {"fsa": run_fsa, "bin_fsa": run_bin_fsa}
+    PROPOSED = {"fsa": run_fsa, "bin_fsa": run_bin_fsa, "pseudo_fsa": run_pseudo_fsa}
     results  = {m: [] for m in [*PROPOSED, *BASELINES]}
 
     for k, (tr_idx, te_idx) in enumerate(splits):
@@ -73,7 +74,8 @@ def run_dataset(name, n_splits=N_SPLITS):
         sigma_fsa = results["fsa"][-1].get("sigma", float("nan"))
         print(f"  [{k+1}/{n_splits}] σ={sigma_fsa:.3f}  "
               f"CI(fsa)={results['fsa'][-1]['ci']:.3f}  "
-              f"CI(bin_fsa)={results['bin_fsa'][-1]['ci']:.3f}")
+              f"CI(bin_fsa)={results['bin_fsa'][-1]['ci']:.3f}  "
+              f"CI(pseudo_fsa)={results['pseudo_fsa'][-1]['ci']:.3f}")
 
     return results
 
@@ -109,7 +111,7 @@ def summarize(dataset_results):
     return pd.DataFrame(rows).set_index("method")
 
 
-ALL_METHODS = ["fsa", "bin_fsa", *BASELINES]
+ALL_METHODS = ["fsa", "bin_fsa", "pseudo_fsa", *BASELINES]
 
 if __name__ == "__main__":
     store = load_results()
@@ -124,9 +126,5 @@ if __name__ == "__main__":
             print(f"  {ds}: re-running (missing: {missing})")
         store["datasets"][ds] = run_dataset(ds)
         save_results(store)
-        print(f"\n{ds} results:")
-        print(summarize(store["datasets"][ds]).to_string())
-        store["datasets"][ds] = run_dataset(ds)
-        save_results(store)                        # save after each dataset
         print(f"\n{ds} results:")
         print(summarize(store["datasets"][ds]).to_string())
