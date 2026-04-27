@@ -23,23 +23,24 @@ def predict_survival_binary(X_train, T_train, Delta_train, X_test, t_quantiles):
     K      = len(t_quantiles)
     S_quant = np.ones((n_test, K))
 
-    for k, t_k in enumerate(t_quantiles):
-        in_Ok = (Delta_train == 1) | (T_train > t_k)
-        X_ok  = X_train[in_Ok]
-        Y_ok  = (T_train[in_Ok] > t_k).astype(int)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning, module="tabpfn")
+        clf = TabPFNClassifier(device="cpu")
 
-        # skip degenerate quantiles (all same class)
-        if Y_ok.sum() == 0 or Y_ok.sum() == len(Y_ok):
-            S_quant[:, k] = float(Y_ok.mean())
-            continue
+        for k, t_k in enumerate(t_quantiles):
+            in_Ok = (Delta_train == 1) | (T_train > t_k)
+            X_ok  = X_train[in_Ok]
+            Y_ok  = (T_train[in_Ok] > t_k).astype(int)
 
-        if len(X_ok) > TABPFN_TRAIN_MAX:
-            idx  = np.random.choice(len(X_ok), TABPFN_TRAIN_MAX, replace=False)
-            X_ok, Y_ok = X_ok[idx], Y_ok[idx]
+            # skip degenerate quantiles (all same class)
+            if Y_ok.sum() == 0 or Y_ok.sum() == len(Y_ok):
+                S_quant[:, k] = float(Y_ok.mean())
+                continue
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=UserWarning, module="tabpfn")
-            clf = TabPFNClassifier(device="cpu")
+            if len(X_ok) > TABPFN_TRAIN_MAX:
+                idx  = np.random.choice(len(X_ok), TABPFN_TRAIN_MAX, replace=False)
+                X_ok, Y_ok = X_ok[idx], Y_ok[idx]
+
             clf.fit(X_ok, Y_ok)
             S_quant[:, k] = np.concatenate([
                 clf.predict_proba(X_test[i : i + TABPFN_BATCH])[:, 1]

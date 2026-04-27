@@ -23,26 +23,26 @@ def run_pseudo_fsa(X_tr, T_tr, D_tr, X_te, t_grid, K=K_DEFAULT):
     n_te    = len(X_te)
     S_quant = np.ones((n_te, K))
 
-    for k, t0 in enumerate(t_landmarks):
-        theta = compute_pseudo_obs(T_tr, D_tr, t0=t0)
-        theta = np.clip(theta, 0.0, 1.0)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning, module="tabpfn")
+        model = TabPFNRegressor(device="cpu")
 
-        X_fit, y_fit = X_tr, theta
-        if len(X_fit) > TABPFN_TRAIN_MAX:
-            idx    = np.random.choice(len(X_fit), TABPFN_TRAIN_MAX, replace=False)
-            X_fit  = X_fit[idx]
-            y_fit  = y_fit[idx]
+        for k, t0 in enumerate(t_landmarks):
+            theta = compute_pseudo_obs(T_tr, D_tr, t0=t0)
+            theta = np.clip(theta, 0.0, 1.0)
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=UserWarning, module="tabpfn")
-            model = TabPFNRegressor(device="cpu")
+            X_fit, y_fit = X_tr, theta
+            if len(X_fit) > TABPFN_TRAIN_MAX:
+                idx    = np.random.choice(len(X_fit), TABPFN_TRAIN_MAX, replace=False)
+                X_fit  = X_fit[idx]
+                y_fit  = y_fit[idx]
+
             model.fit(X_fit, y_fit)
             preds = np.concatenate([
                 model.predict(X_te[i : i + TABPFN_BATCH])
                 for i in range(0, n_te, TABPFN_BATCH)
             ])
-
-        S_quant[:, k] = np.clip(preds, 0.0, 1.0)
+            S_quant[:, k] = np.clip(preds, 0.0, 1.0)
 
     S   = _stepwise_surv(S_quant, t_landmarks, t_grid)
     med = predicted_median(S, t_grid)
