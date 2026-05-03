@@ -1,4 +1,5 @@
 """Frozen-sigma AFT: TabPFN backbone + scipy sigma fitting."""
+import warnings
 import numpy as np
 from scipy.stats import norm
 from scipy.optimize import minimize
@@ -21,12 +22,14 @@ def predict_log_time(X_train, T_train, X_test):
     if len(X_train) > TABPFN_TRAIN_MAX:
         idx = np.random.choice(len(X_train), TABPFN_TRAIN_MAX, replace=False)
         X_train, T_train = X_train[idx], T_train[idx]
-    model = TabPFNRegressor(device="cpu")
-    model.fit(X_train, T_train)
-    preds = np.concatenate([
-        model.predict(X_test[i : i + TABPFN_BATCH], output_type="median")
-        for i in range(0, len(X_test), TABPFN_BATCH)
-    ])
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning, module="tabpfn")
+        model = TabPFNRegressor(device="cpu")
+        model.fit(X_train, T_train)
+        preds = np.concatenate([
+            model.predict(X_test[i : i + TABPFN_BATCH], output_type="median")
+            for i in range(0, len(X_test), TABPFN_BATCH)
+        ])
     return np.log(np.clip(preds, EPS, None))
 
 
@@ -34,7 +37,6 @@ def fit_sigma(T, Delta, mu_log):
     """Fit σ by censored log-likelihood MLE (log-normal AFT).
 
     T: observed times, Delta: event indicators, mu_log: predicted log-times.
-    Returns scalar sigma.
     """
     T      = np.asarray(T,      dtype=float)
     Delta  = np.asarray(Delta,  dtype=float)
@@ -42,14 +44,18 @@ def fit_sigma(T, Delta, mu_log):
     log_t  = np.log(np.clip(T, EPS, None))
 
     def neg_ll(sigma_raw):
-        sigma   = np.log1p(np.exp(sigma_raw)) + EPS
-        z       = (log_t - mu_log) / sigma
-        log_f   = -log_t - np.log(sigma) + norm.logpdf(z)
-        log_S   = norm.logsf(z)
+        sigma = np.log1p(np.exp(sigma_raw)) + EPS
+        z     = (log_t - mu_log) / sigma
+        log_f = -log_t - np.log(sigma) + norm.logpdf(z)
+        log_S = norm.logsf(z)
         return -np.sum(Delta * log_f + (1 - Delta) * log_S)
 
-    res = minimize(neg_ll, x0=0.0, method="L-BFGS-B")
-    return float(np.log1p(np.exp(res.x[0])) + EPS)
+    res   = minimize(neg_ll, x0=0.0, method="L-BFGS-B")
+    sigma = float(np.log1p(np.exp(res.x[0])) + EPS)
+    if not res.success or not np.isfinite(sigma):
+        warnings.warn(f"fit_sigma: optimization did not converge — σ={sigma:.4g}. "
+                      f"Reason: {res.message}", RuntimeWarning, stacklevel=2)
+    return sigma
 
 
 def survival_lognormal(t_grid, mu_log, sigma):
