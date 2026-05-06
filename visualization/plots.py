@@ -22,11 +22,12 @@ DATASET_LABELS = {
 
 METRICS = [("ci", "C-index", "↑"), ("ibs", "IBS", "↓")]
 
-METHOD_ORDER = ["fsa", "pseudo_fsa", "bin_fsa", "cox", "weibull", "lognormal", "rsf"]
+METHOD_ORDER = ["fsa", "pseudo_fsa", "fsa_bs", "bin_fsa", "cox", "weibull", "lognormal", "rsf"]
 
 METHOD_LABELS = {
     "fsa":        "FSA (ours)",
     "pseudo_fsa": "FSA-PO (ours)",
+    "fsa_bs":     "FSA-BS (ours)",
     "bin_fsa":    "BinFSA (Kim et al.)",
     "cox":        "Cox PH",
     "weibull":    "Weibull AFT",
@@ -35,13 +36,14 @@ METHOD_LABELS = {
 }
 
 # Muted 3-group palette: soft purple | soft green | soft blue
-_C_FM       = "#9b8ec4"   # soft purple  — fsa, pseudo_fsa
-_C_BIN      = "#6aab7e"   # soft green   — bin_fsa
-_C_BASELINE = "#6baed6"   # soft blue    — cox, weibull, lognormal, rsf
+_C_FM       = "#9b8ec4"
+_C_BIN      = "#6aab7e"
+_C_BASELINE = "#6baed6"
 
 METHOD_COLORS = {
     "fsa":        _C_FM,
     "pseudo_fsa": _C_FM,
+    "fsa_bs":     _C_FM,
     "bin_fsa":    _C_BIN,
     "cox":        _C_BASELINE,
     "weibull":    _C_BASELINE,
@@ -52,6 +54,7 @@ METHOD_COLORS = {
 METHOD_HATCHES = {
     "fsa":        "",
     "pseudo_fsa": "//",
+    "fsa_bs":     "||",
     "bin_fsa":    "",
     "cox":        "",
     "weibull":    "//",
@@ -65,7 +68,23 @@ def _se(vals):
     return v.std() / np.sqrt(len(v))
 
 
-def plot_results_boxplot(results_path="results/results.json"):
+def _load_gibbs_as_records(gibbs_path="results/results_gibbs.json"):
+    """Extract last-iteration CI/IBS from each split → flat records for fsa_bs."""
+    if not os.path.exists(gibbs_path):
+        return []
+    with open(gibbs_path) as f:
+        store = json.load(f)
+    records = []
+    for ds, splits in store["datasets"].items():
+        for split_iters in splits:
+            last = split_iters[-1]
+            records.append({"dataset": ds, "method": "fsa_bs",
+                             "C-index": last["CI"], "IBS": last["IBS"]})
+    return records
+
+
+def plot_results_boxplot(results_path="results/results.json",
+                         gibbs_path="results/results_gibbs.json"):
     """Box plots of C-index and IBS for all methods × datasets."""
     with open(results_path) as f:
         store = json.load(f)
@@ -76,8 +95,9 @@ def plot_results_boxplot(results_path="results/results.json"):
             for s in splits:
                 records.append({"dataset": ds, "method": method,
                                  "C-index": s["ci"], "IBS": s["ibs"]})
-    df = pd.DataFrame(records)
+    records += _load_gibbs_as_records(gibbs_path)
 
+    df       = pd.DataFrame(records)
     datasets = list(store["datasets"].keys())
     present  = [m for m in METHOD_ORDER if m in df["method"].unique()]
 
@@ -116,13 +136,12 @@ def plot_results_boxplot(results_path="results/results.json"):
             ax.set_ylabel(f"{metric}  {better}" if col == 0 else "", fontsize=10)
             ax.spines[["top", "right"]].set_visible(False)
 
-            # group separators (after pseudo_fsa and bin_fsa)
-            for sep_after in ["pseudo_fsa", "bin_fsa"]:
+            # group separators: after last "ours" method and after bin_fsa
+            for sep_after in ["fsa_bs", "bin_fsa"]:
                 if sep_after in present:
                     xpos = present.index(sep_after) + 1.5
                     ax.axvline(xpos, color="#cccccc", linewidth=0.8, linestyle="--")
 
-    # Legend: one entry per method, color reflects group, hatch distinguishes within group
     legend_handles = [
         mpatches.Patch(facecolor=METHOD_COLORS[m], hatch=METHOD_HATCHES[m],
                        edgecolor="#444444", linewidth=0.5, label=METHOD_LABELS[m],
@@ -145,7 +164,7 @@ def plot_k_ablation(ablation_path="results/results_ablation.json",
                     results_path="results/results.json"):
     """C-index and IBS vs K for bin_fsa, one curve per dataset.
 
-    FSA-PO reference shown as open dots with ±SE error bars (same dataset color).
+    FSA-PO reference shown as filled stars with ±SE error bars.
     """
     with open(ablation_path) as f:
         abl = json.load(f)
@@ -164,12 +183,11 @@ def plot_k_ablation(ablation_path="results/results_ablation.json",
                     for key, _, _ in METRICS
                 }
 
-    datasets = list(abl["datasets"].keys())
-    palette  = sns.color_palette("tab10", n_colors=len(datasets))
-
+    datasets  = list(abl["datasets"].keys())
+    palette   = sns.color_palette("tab10", n_colors=len(datasets))
     ks_all    = sorted(int(k) for k in next(iter(abl["datasets"].values())))
-    xs_k      = list(range(len(ks_all)))          # 0, 1, 2, 3
-    x_fsa_po  = len(ks_all)                       # 4 — one step after last K
+    xs_k      = list(range(len(ks_all)))
+    x_fsa_po  = len(ks_all)
     xtick_pos = xs_k + [x_fsa_po]
     xtick_lbl = [str(k) for k in ks_all] + ["FSA-PO"]
 
@@ -178,16 +196,10 @@ def plot_k_ablation(ablation_path="results/results_ablation.json",
     for ax, (key, label, better) in zip(axes, METRICS):
         for ds, color in zip(datasets, palette):
             ks    = sorted(int(k) for k in abl["datasets"][ds])
-            means = []
-            ses   = []
-            for k in ks:
-                vals = [s[key] for s in abl["datasets"][ds][str(k)]
-                        if not np.isnan(s[key])]
-                means.append(np.mean(vals))
-                ses.append(_se(vals))
-
-            means = np.array(means)
-            ses   = np.array(ses)
+            means = np.array([np.mean([s[key] for s in abl["datasets"][ds][str(k)]
+                                       if not np.isnan(s[key])]) for k in ks])
+            ses   = np.array([_se([s[key] for s in abl["datasets"][ds][str(k)]
+                                   if not np.isnan(s[key])]) for k in ks])
             ds_label = DATASET_LABELS.get(ds, ds)
 
             ax.plot(xs_k, means, marker="o", markersize=4.5, linewidth=1.8,
@@ -195,19 +207,16 @@ def plot_k_ablation(ablation_path="results/results_ablation.json",
             ax.fill_between(xs_k, means - ses, means + ses,
                             alpha=0.18, color=color, zorder=2)
 
-            # FSA-PO: single star + error bar in its own column
             if ds in pseudo_ref:
                 ref_mean, ref_se = pseudo_ref[ds][key]
-                ax.errorbar(
-                    x_fsa_po, ref_mean, yerr=ref_se,
-                    fmt="*", markersize=12, capsize=4, capthick=1.3,
-                    linewidth=0, elinewidth=1.5,
-                    color=color, markerfacecolor=color, markeredgewidth=0.5,
-                    zorder=5,
-                )
+                ax.errorbar(x_fsa_po, ref_mean, yerr=ref_se,
+                            fmt="*", markersize=12, capsize=4, capthick=1.3,
+                            linewidth=0, elinewidth=1.5,
+                            color=color, markerfacecolor=color,
+                            markeredgewidth=0.5, zorder=5)
 
-        ax.axvline(x_fsa_po - 0.5, color="#cccccc",
-                   linewidth=0.8, linestyle="--", zorder=1)
+        ax.axvline(x_fsa_po - 0.5, color="#cccccc", linewidth=0.8,
+                   linestyle="--", zorder=1)
         ax.set_xlabel("$K$ (number of bins)", fontsize=11)
         ax.set_ylabel(f"{label}  {better}", fontsize=11)
         ax.set_xticks(xtick_pos)
@@ -216,9 +225,7 @@ def plot_k_ablation(ablation_path="results/results_ablation.json",
         ax.tick_params(axis="y", labelsize=9)
         ax.spines[["top", "right"]].set_visible(False)
 
-    curve_handles, curve_labels = axes[0].get_legend_handles_labels()
-    axes[0].legend(handles=curve_handles, fontsize=8.5, frameon=False)
-
+    axes[0].legend(*axes[0].get_legend_handles_labels(), fontsize=8.5, frameon=False)
     fig.suptitle("bin-FSA ablation: effect of $K$", fontsize=12,
                  fontweight="bold", y=1.02)
     plt.tight_layout()
