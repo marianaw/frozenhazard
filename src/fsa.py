@@ -66,3 +66,13 @@ def predicted_median(surv_matrix, t_grid):
     med     = np.full(len(surv_matrix), np.inf)
     med[has] = t_grid[idx[has]]
     return med
+
+
+def run_fsa(X_tr, T_tr, D_tr, X_te, t_grid, model):
+    mask         = D_tr == 1
+    X_all        = np.vstack([X_tr, X_te])
+    mu_all       = predict_log_time(X_tr[mask], T_tr[mask], X_all, model)
+    mu_tr, mu_te = mu_all[:len(X_tr)], mu_all[len(X_tr):]
+    sigma        = fit_sigma(T_tr, D_tr, mu_tr)
+    S            = survival_lognormal(t_grid, mu_te, sigma)
+    return S, predicted_median(S, t_grid), sigma

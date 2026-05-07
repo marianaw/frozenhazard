@@ -11,8 +11,8 @@ import warnings
 import numpy as np
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 
-_TRAIN_MAX = 1_000   # conservative CPU limit for in-context samples
-_BATCH     = 164     # max test queries per TabPFN forward pass on CPU
+_TRAIN_MAX = 2_000
+_BATCH     = 256
 
 
 def _subsample(X, y, n_max=_TRAIN_MAX):
@@ -28,7 +28,7 @@ def tabpfn_regressor(X_ctx, y_ctx, X_query):
     X_ctx, y_ctx = _subsample(X_ctx, y_ctx)
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=UserWarning, module="tabpfn")
-        m = TabPFNRegressor(device="cpu")
+        m = TabPFNRegressor()
         m.fit(X_ctx, y_ctx)
         return np.concatenate([
             m.predict(X_query[i : i + _BATCH], output_type="median")
@@ -40,7 +40,7 @@ def tabpfn_classifier(X_ctx, y_ctx, X_query):
     X_ctx, y_ctx = _subsample(X_ctx, y_ctx)
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=UserWarning, module="tabpfn")
-        m = TabPFNClassifier(device="cpu")
+        m = TabPFNClassifier()
         m.fit(X_ctx, y_ctx)
         return np.concatenate([
             m.predict_proba(X_query[i : i + _BATCH])[:, 1]

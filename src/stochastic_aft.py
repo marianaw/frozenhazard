@@ -17,7 +17,7 @@ from src.pseudo_obs import compute_pseudo_obs
 from src.pseudo_fsa import run_pseudo_fsa
 from src.utils import compute_ci, compute_ibs
 
-N_ITER = 10
+N_ITER = 20
 FRAC   = 0.5
 
 
@@ -67,11 +67,10 @@ def run_stochastic_aft(X_u, y_u, X_c, C_c, X_test, T_test, E_test, t_grid,
 
     rows = []
     for it in range(1, n_iter + 1):
-        # --- Context: 50% uncensored + 50% censored ---
-        idx_u     = rng.choice(n_u, max(1, int(FRAC * n_u)), replace=False)
+        # --- Context: all uncensored + 50% censored (pseudo-targets) ---
         idx_c     = rng.choice(n_c, max(1, int(FRAC * n_c)), replace=False)
-        X_ctx     = np.vstack([X_u[idx_u], X_c[idx_c]])
-        log_y_ctx = np.concatenate([log_y_u[idx_u], log_y_c[idx_c]])
+        X_ctx     = np.vstack([X_u, X_c[idx_c]])
+        log_y_ctx = np.concatenate([log_y_u, log_y_c[idx_c]])
 
         # --- Predict mu for all train + test in one forward pass ---
         mu_all  = model(X_ctx, log_y_ctx, np.vstack([X_train, X_test]))

@@ -22,8 +22,8 @@ def _lifelines_predict(model, X_test, t_grid):
     return surv, med
 
 
-def fit_predict_cox(X_tr, T_tr, D_tr, X_te, t_grid):
-    m = CoxPHFitter().fit(_df(X_tr, T_tr, D_tr), duration_col='T', event_col='E')
+def fit_predict_cox(X_tr, T_tr, D_tr, X_te, t_grid, penalizer=0.0):
+    m = CoxPHFitter(penalizer=penalizer).fit(_df(X_tr, T_tr, D_tr), duration_col='T', event_col='E')
     return _lifelines_predict(m, X_te, t_grid)
 
 
