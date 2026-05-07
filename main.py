@@ -9,13 +9,21 @@ logging.getLogger("posthog").setLevel(logging.CRITICAL)
 
 import numpy as np
 import pandas as pd
+from functools import partial
 
+from src.foundation_models import tabpfn_regressor, tabpfn_classifier, tabicl_regressor, tabicl_classifier
 from src.fsa import (TABPFN_BATCH, TABPFN_TRAIN_MAX, fit_sigma,
                      predict_log_time, predicted_median, survival_lognormal)
 from src.bin_fsa import run_bin_fsa
 from src.pseudo_fsa import run_pseudo_fsa
 from src.baselines import BASELINES
 from src.utils import DATASETS, compute_ci, compute_ibs, make_splits
+
+# ── Backend selection ─────────────────────────────────────────────────────────
+# Change BACKEND (and the two callables) to switch foundation models.
+BACKEND    = "tabicl"
+REGRESSOR  = tabicl_regressor
+CLASSIFIER = tabicl_classifier
 
 N_SPLITS     = 10
 TEST_SIZE    = 0.2
@@ -30,6 +38,7 @@ META = {
     "t_grid_points":    T_GRID_PTS,
     "tabpfn_train_max": TABPFN_TRAIN_MAX,
     "tabpfn_batch":     TABPFN_BATCH,
+    "backend":          BACKEND,
 }
 
 # --- Core experiment logic ---
@@ -37,7 +46,7 @@ META = {
 def run_fsa(X_tr, T_tr, D_tr, X_te, t_grid):
     uncensored   = D_tr == 1
     X_all        = np.vstack([X_tr, X_te])
-    mu_all       = predict_log_time(X_tr[uncensored], T_tr[uncensored], X_all)
+    mu_all       = predict_log_time(X_tr[uncensored], T_tr[uncensored], X_all, model=REGRESSOR)
     mu_tr, mu_te = mu_all[:len(X_tr)], mu_all[len(X_tr):]
     sigma        = fit_sigma(T_tr, D_tr, mu_tr)
     S            = survival_lognormal(t_grid, mu_te, sigma)
@@ -51,8 +60,12 @@ def evaluate(T_tr, D_tr, T_te, D_te, S, med, t_grid):
     }
 
 
-PROPOSED    = {"fsa": run_fsa, "bin_fsa": run_bin_fsa, "pseudo_fsa": run_pseudo_fsa}
-ALL_METHODS = ["fsa", "bin_fsa", "pseudo_fsa", *BASELINES]
+PROPOSED    = {
+    f"fsa_{BACKEND}":        run_fsa,
+    f"bin_fsa_{BACKEND}":    partial(run_bin_fsa,    model=CLASSIFIER),
+    f"pseudo_fsa_{BACKEND}": partial(run_pseudo_fsa, model=REGRESSOR),
+}
+ALL_METHODS = [*PROPOSED, *BASELINES]
 
 
 def run_dataset(name, methods_to_run, n_splits=N_SPLITS):
@@ -92,11 +105,28 @@ def run_dataset(name, methods_to_run, n_splits=N_SPLITS):
 
 # --- Persistence ---
 
+# Proposed method names that predate backend suffixes (legacy keys).
+_LEGACY_PROPOSED = {"fsa", "bin_fsa", "pseudo_fsa"}
+
+
 def load_results(path=RESULTS_FILE):
     if not os.path.exists(path):
         return {"meta": META, "datasets": {}}
     with open(path) as f:
-        return json.load(f)
+        store = json.load(f)
+    # Migrate legacy keys (no backend suffix) → tabpfn suffix.
+    # Safe: only renames if new key doesn't already exist.
+    migrated = False
+    for ds_data in store.get("datasets", {}).values():
+        for old in list(ds_data):
+            new = f"{old}_tabpfn"
+            if old in _LEGACY_PROPOSED and new not in ds_data:
+                ds_data[new] = ds_data.pop(old)
+                migrated = True
+    if migrated:
+        save_results(store, path)
+        print("  Migrated legacy method keys → *_tabpfn suffix.")
+    return store
 
 
 def save_results(store, path=RESULTS_FILE):

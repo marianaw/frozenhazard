@@ -1,35 +1,25 @@
-"""Frozen-sigma AFT: TabPFN backbone + scipy sigma fitting."""
+"""Frozen-sigma AFT: tabular foundation model backbone + scipy sigma fitting."""
 import warnings
 import numpy as np
 from scipy.stats import norm
 from scipy.optimize import minimize
-from tabpfn import TabPFNRegressor
+
+from src.foundation_models import tabpfn_regressor
 
 EPS              = 1e-8
-TABPFN_TRAIN_MAX = 1_000   # CPU limit for in-context training samples
-TABPFN_BATCH     = 164     # max test queries per forward pass on CPU
+TABPFN_TRAIN_MAX = 1_000   # re-exported for legacy imports / META logging
+TABPFN_BATCH     = 164
 
 
-def predict_log_time(X_train, T_train, X_test):
-    """Predict log-times via TabPFN in-context regression.
+def predict_log_time(X_train, T_train, X_test, model=tabpfn_regressor):
+    """Predict log-times via in-context regression.
 
-    Trains on actual times T_train (uncensored), predicts median T for X_test,
-    returns log of those predictions as mu_log.
+    Fits on actual times T_train, returns log of predicted times for X_test.
     """
     X_train = np.asarray(X_train, dtype=float)
     T_train = np.asarray(T_train, dtype=float)
     X_test  = np.asarray(X_test,  dtype=float)
-    if len(X_train) > TABPFN_TRAIN_MAX:
-        idx = np.random.choice(len(X_train), TABPFN_TRAIN_MAX, replace=False)
-        X_train, T_train = X_train[idx], T_train[idx]
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=UserWarning, module="tabpfn")
-        model = TabPFNRegressor(device="cpu")
-        model.fit(X_train, T_train)
-        preds = np.concatenate([
-            model.predict(X_test[i : i + TABPFN_BATCH], output_type="median")
-            for i in range(0, len(X_test), TABPFN_BATCH)
-        ])
+    preds   = model(X_train, T_train, X_test)
     return np.log(np.clip(preds, EPS, None))
 
 

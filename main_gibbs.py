@@ -9,12 +9,14 @@ logging.getLogger("posthog").setLevel(logging.CRITICAL)
 
 import numpy as np
 
+from src.foundation_models import tabpfn_regressor as REGRESSOR
 from src.stochastic_aft import run_stochastic_aft, N_ITER
 from src.utils import DATASETS, make_splits
-from main import T_GRID_PTS, TEST_SIZE, SEED
+from main import BACKEND, T_GRID_PTS, TEST_SIZE, SEED
 
 N_SPLITS     = 10
-RESULTS_FILE = "results/results_gibbs.json"
+RESULTS_FILE = f"results/results_gibbs_{BACKEND}.json"
+_LEGACY_FILE = "results/results_gibbs.json"   # pre-backend-suffix runs (tabpfn)
 
 META = {
     "n_splits":      N_SPLITS,
@@ -22,6 +24,7 @@ META = {
     "seed":          SEED,
     "t_grid_points": T_GRID_PTS,
     "n_iter":        N_ITER,
+    "backend":       BACKEND,
 }
 
 
@@ -44,7 +47,7 @@ def run_gibbs_dataset(name, from_split=0):
             X_u=X_tr[unc],  y_u=T_tr[unc],
             X_c=X_tr[~unc], C_c=T_tr[~unc],
             X_test=X_te, T_test=T_te, E_test=D_te,
-            t_grid=t_grid, seed=SEED + k,
+            t_grid=t_grid, seed=SEED + k, model=REGRESSOR,
         )
         results.append(df.reset_index().to_dict(orient="records"))
 
@@ -53,6 +56,10 @@ def run_gibbs_dataset(name, from_split=0):
 
 def load_results(path=RESULTS_FILE):
     if not os.path.exists(path):
+        # Fall back to legacy file (pre-suffix tabpfn results) so we don't re-run.
+        if BACKEND == "tabpfn" and os.path.exists(_LEGACY_FILE):
+            with open(_LEGACY_FILE) as f:
+                return json.load(f)
         return {"meta": META, "datasets": {}}
     with open(path) as f:
         return json.load(f)

@@ -11,11 +11,12 @@ import numpy as np
 
 from src.bin_fsa import run_bin_fsa
 from src.utils import DATASETS, make_splits
-from main import evaluate, T_GRID_PTS, TEST_SIZE, SEED
+from main import BACKEND, CLASSIFIER, evaluate, T_GRID_PTS, TEST_SIZE, SEED
 
 K_VALUES      = [3, 5, 10, 20]
 N_SPLITS      = 10
-ABLATION_FILE = "results/results_ablation.json"
+ABLATION_FILE = f"results/results_ablation_{BACKEND}.json"
+_LEGACY_FILE  = "results/results_ablation.json"   # pre-backend-suffix runs (tabpfn)
 
 
 def run_ablation_dataset(name, ks_to_run):
@@ -30,7 +31,7 @@ def run_ablation_dataset(name, ks_to_run):
         t_grid = np.linspace(np.percentile(T_tr, 5), np.percentile(T_tr, 95), T_GRID_PTS)
 
         for k in ks_to_run:
-            S, med, _ = run_bin_fsa(X_tr, T_tr, D_tr, X_te, t_grid, K=k)
+            S, med, _ = run_bin_fsa(X_tr, T_tr, D_tr, X_te, t_grid, K=k, model=CLASSIFIER)
             row = evaluate(T_tr, D_tr, T_te, D_te, S, med, t_grid)
             results[k].append(row)
 
@@ -44,6 +45,9 @@ def run_ablation_dataset(name, ks_to_run):
 
 def load_ablation(path=ABLATION_FILE):
     if not os.path.exists(path):
+        if BACKEND == "tabpfn" and os.path.exists(_LEGACY_FILE):
+            with open(_LEGACY_FILE) as f:
+                return json.load(f)
         return {"k_values": K_VALUES, "datasets": {}}
     with open(path) as f:
         return json.load(f)

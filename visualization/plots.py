@@ -22,45 +22,61 @@ DATASET_LABELS = {
 
 METRICS = [("ci", "C-index", "↑"), ("ibs", "IBS", "↓")]
 
-METHOD_ORDER = ["fsa", "pseudo_fsa", "fsa_bs", "bin_fsa", "cox", "weibull", "lognormal", "rsf"]
+# ── Method catalogue ──────────────────────────────────────────────────────────
+# Colors: purple = ours, green = BinFSA, blue = baselines.
+# Lighter shade = TabICL variant.  Hatches distinguish method type.
+_C_FM       = "#9b8ec4"   # TabPFN — our methods
+_C_FM_ALT   = "#c4bcd9"   # TabICL — our methods
+_C_BIN      = "#6aab7e"   # TabPFN — BinFSA
+_C_BIN_ALT  = "#a8cdb4"   # TabICL — BinFSA
+_C_BASELINE = "#6baed6"   # baselines (no backend)
+
+METHOD_ORDER = [
+    "fsa_tabpfn",        "fsa_tabicl",
+    "pseudo_fsa_tabpfn", "pseudo_fsa_tabicl",
+    "fsa_bs_tabpfn",     "fsa_bs_tabicl",
+    "bin_fsa_tabpfn",    "bin_fsa_tabicl",
+    "cox", "weibull", "lognormal", "rsf",
+]
 
 METHOD_LABELS = {
-    "fsa":        "FSA (ours)",
-    "pseudo_fsa": "FSA-PO (ours)",
-    "fsa_bs":     "FSA-BS (ours)",
-    "bin_fsa":    "BinFSA (Kim et al.)",
-    "cox":        "Cox PH",
-    "weibull":    "Weibull AFT",
-    "lognormal":  "LogNorm AFT",
-    "rsf":        "RSF",
+    "fsa_tabpfn":        "FSA (PFN)",
+    "fsa_tabicl":        "FSA (ICL)",
+    "pseudo_fsa_tabpfn": "FSA-PO (PFN)",
+    "pseudo_fsa_tabicl": "FSA-PO (ICL)",
+    "fsa_bs_tabpfn":     "FSA-BS (PFN)",
+    "fsa_bs_tabicl":     "FSA-BS (ICL)",
+    "bin_fsa_tabpfn":    "BinFSA (PFN)",
+    "bin_fsa_tabicl":    "BinFSA (ICL)",
+    "cox":       "Cox PH",
+    "weibull":   "Weibull AFT",
+    "lognormal": "LogNorm AFT",
+    "rsf":       "RSF",
 }
 
-# Muted 3-group palette: soft purple | soft green | soft blue
-_C_FM       = "#9b8ec4"
-_C_BIN      = "#6aab7e"
-_C_BASELINE = "#6baed6"
-
 METHOD_COLORS = {
-    "fsa":        _C_FM,
-    "pseudo_fsa": _C_FM,
-    "fsa_bs":     _C_FM,
-    "bin_fsa":    _C_BIN,
-    "cox":        _C_BASELINE,
-    "weibull":    _C_BASELINE,
-    "lognormal":  _C_BASELINE,
-    "rsf":        _C_BASELINE,
+    "fsa_tabpfn":        _C_FM,     "fsa_tabicl":        _C_FM_ALT,
+    "pseudo_fsa_tabpfn": _C_FM,     "pseudo_fsa_tabicl": _C_FM_ALT,
+    "fsa_bs_tabpfn":     _C_FM,     "fsa_bs_tabicl":     _C_FM_ALT,
+    "bin_fsa_tabpfn":    _C_BIN,    "bin_fsa_tabicl":    _C_BIN_ALT,
+    "cox":       _C_BASELINE, "weibull":   _C_BASELINE,
+    "lognormal": _C_BASELINE, "rsf":       _C_BASELINE,
 }
 
 METHOD_HATCHES = {
-    "fsa":        "",
-    "pseudo_fsa": "//",
-    "fsa_bs":     "||",
-    "bin_fsa":    "",
-    "cox":        "",
-    "weibull":    "//",
-    "lognormal":  "xx",
-    "rsf":        "..",
+    "fsa_tabpfn":        "",    "fsa_tabicl":        "",
+    "pseudo_fsa_tabpfn": "//",  "pseudo_fsa_tabicl": "//",
+    "fsa_bs_tabpfn":     "||",  "fsa_bs_tabicl":     "||",
+    "bin_fsa_tabpfn":    "",    "bin_fsa_tabicl":    "",
+    "cox":       "",    "weibull":   "//",
+    "lognormal": "xx",  "rsf":       "..",
 }
+
+# Vertical separator after the last present method from each group.
+_SEP_GROUPS = [
+    {"fsa_bs_tabpfn",  "fsa_bs_tabicl"},
+    {"bin_fsa_tabpfn", "bin_fsa_tabicl"},
+]
 
 
 def _se(vals):
@@ -68,23 +84,42 @@ def _se(vals):
     return v.std() / np.sqrt(len(v))
 
 
-def _load_gibbs_as_records(gibbs_path="results/results_gibbs.json"):
-    """Extract last-iteration CI/IBS from each split → flat records for fsa_bs."""
+def _draw_separators(ax, present):
+    for group in _SEP_GROUPS:
+        indices = [present.index(m) for m in group if m in present]
+        if indices:
+            ax.axvline(max(indices) + 1.5, color="#cccccc",
+                       linewidth=0.8, linestyle="--", zorder=1)
+
+
+def _load_gibbs_as_records(gibbs_path):
+    """Last-iteration CI/IBS per split → flat records for fsa_bs_{backend}."""
     if not os.path.exists(gibbs_path):
         return []
     with open(gibbs_path) as f:
         store = json.load(f)
+    backend = store.get("meta", {}).get("backend", "tabpfn")
+    method  = f"fsa_bs_{backend}"
     records = []
     for ds, splits in store["datasets"].items():
         for split_iters in splits:
             last = split_iters[-1]
-            records.append({"dataset": ds, "method": "fsa_bs",
+            records.append({"dataset": ds, "method": method,
                              "C-index": last["CI"], "IBS": last["IBS"]})
     return records
 
 
-def plot_results_boxplot(results_path="results/results.json",
-                         gibbs_path="results/results_gibbs.json"):
+def _discover_gibbs_paths(results_dir="results"):
+    """All gibbs result files: legacy results_gibbs.json + results_gibbs_*.json."""
+    paths = []
+    for fname in sorted(os.listdir(results_dir)):
+        if fname == "results_gibbs.json" or \
+                (fname.startswith("results_gibbs_") and fname.endswith(".json")):
+            paths.append(os.path.join(results_dir, fname))
+    return paths
+
+
+def plot_results_boxplot(results_path="results/results.json"):
     """Box plots of C-index and IBS for all methods × datasets."""
     with open(results_path) as f:
         store = json.load(f)
@@ -95,7 +130,10 @@ def plot_results_boxplot(results_path="results/results.json",
             for s in splits:
                 records.append({"dataset": ds, "method": method,
                                  "C-index": s["ci"], "IBS": s["ibs"]})
-    records += _load_gibbs_as_records(gibbs_path)
+
+    results_dir = os.path.dirname(os.path.abspath(results_path))
+    for gp in _discover_gibbs_paths(results_dir):
+        records += _load_gibbs_as_records(gp)
 
     df       = pd.DataFrame(records)
     datasets = list(store["datasets"].keys())
@@ -135,12 +173,7 @@ def plot_results_boxplot(results_path="results/results.json",
             ax.tick_params(axis="y", labelsize=8)
             ax.set_ylabel(f"{metric}  {better}" if col == 0 else "", fontsize=10)
             ax.spines[["top", "right"]].set_visible(False)
-
-            # group separators: after last "ours" method and after bin_fsa
-            for sep_after in ["fsa_bs", "bin_fsa"]:
-                if sep_after in present:
-                    xpos = present.index(sep_after) + 1.5
-                    ax.axvline(xpos, color="#cccccc", linewidth=0.8, linestyle="--")
+            _draw_separators(ax, present)
 
     legend_handles = [
         mpatches.Patch(facecolor=METHOD_COLORS[m], hatch=METHOD_HATCHES[m],
@@ -166,6 +199,8 @@ def plot_k_ablation(ablation_path="results/results_ablation.json",
 
     FSA-PO reference shown as filled stars with ±SE error bars.
     """
+    if not os.path.exists(ablation_path):
+        return
     with open(ablation_path) as f:
         abl = json.load(f)
 
@@ -174,12 +209,12 @@ def plot_k_ablation(ablation_path="results/results_ablation.json",
         with open(results_path) as f:
             res = json.load(f)
         for ds, methods in res["datasets"].items():
-            if "pseudo_fsa" in methods:
+            po_keys = [k for k in methods if k.startswith("pseudo_fsa_")]
+            if po_keys:
+                splits = methods[po_keys[0]]
                 pseudo_ref[ds] = {
-                    key: (np.mean([s[key] for s in methods["pseudo_fsa"]
-                                   if not np.isnan(s[key])]),
-                          _se([s[key] for s in methods["pseudo_fsa"]
-                               if not np.isnan(s[key])]))
+                    key: (np.mean([s[key] for s in splits if not np.isnan(s[key])]),
+                          _se([s[key]  for s in splits if not np.isnan(s[key])]))
                     for key, _, _ in METRICS
                 }
 
