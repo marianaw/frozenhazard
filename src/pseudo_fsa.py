@@ -4,19 +4,21 @@ Pipeline:
   1. Compute jackknife KM pseudo-observations θ_i at the median event time.
   2. Invert the log-normal survival function to get initial log-time targets for
      censored subjects: μ_i = log(t0) − σ_0 · Φ⁻¹(1 − θ_i).
-  3. Train TabPFN on (X_train, y_all): actual times for uncensored, imputed for censored.
+  3. Train foundation model on (X_train, y_all): actual times for uncensored, imputed for censored.
   4. Fit σ via censored log-likelihood MLE.
   5. Return log-normal AFT survival curves — same interface as run_fsa.
 """
 import numpy as np
 from scipy.stats import norm
 
+from src.foundation_models import tabpfn_regressor
 from src.fsa import (EPS, fit_sigma, predict_log_time,
                      survival_lognormal, predicted_median)
 from src.pseudo_obs import compute_pseudo_obs
 
 
-def run_pseudo_fsa(X_tr, T_tr, D_tr, X_te, t_grid, sigma_init=0.5):
+def run_pseudo_fsa(X_tr, T_tr, D_tr, X_te, t_grid, sigma_init=0.5,
+                   model=tabpfn_regressor):
     """Log-normal AFT with pseudo-observation imputation. Returns (S, med, sigma)."""
     unc = D_tr == 1
 
@@ -36,7 +38,7 @@ def run_pseudo_fsa(X_tr, T_tr, D_tr, X_te, t_grid, sigma_init=0.5):
 
     # --- Predict log-times, fit sigma, survival function ---
     X_all          = np.vstack([X_tr, X_te])
-    mu_all         = predict_log_time(X_tr, y_all, X_all)
+    mu_all         = predict_log_time(X_tr, y_all, X_all, model=model)
     mu_tr, mu_te   = mu_all[:len(X_tr)], mu_all[len(X_tr):]
     sigma          = fit_sigma(T_tr, D_tr, mu_tr)
     S              = survival_lognormal(t_grid, mu_te, sigma)

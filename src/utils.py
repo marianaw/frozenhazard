@@ -69,9 +69,9 @@ def load_flchain():
 DATASETS = {
     'whas500': load_whas500,
     'gbsg': load_gbsg,
-    # 'support': load_support,
+    'support': load_support,
     'metabric': load_metabric,
-    # 'flchain': load_flchain,
+    'flchain': load_flchain,
 }
 
 
