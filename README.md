@@ -1,2 +1,2 @@
 # frozenhazard
-Survival Analysis that leverages tabular foundational models.
+Survival Analysis that leverages tabular foundation models.

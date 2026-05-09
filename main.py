@@ -1,4 +1,5 @@
-"""Main experiment pipeline: all datasets × all methods × both backends × all seeds."""
+"""Main experiment pipeline: all datasets, all methods, both backends, all seeds.
+Note that one seed produces 10 splits of the data."""
 import json
 import logging
 import os
